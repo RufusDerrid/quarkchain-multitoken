@@ -1,0 +1,70 @@
+# Python CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-python/ for more details
+#
+version: 2
+jobs:
+  build:
+    docker:
+      - image: qcdll/circleci-pypy3-rocksdb
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      # The librocksdb* that comes with the image does not work on circle ci :(
+      # Let's rebuild
+      - run:
+          name: Cleanup Prebuilt RocksDB
+          command: |
+            cd /opt/rocksdb
+            make clean
+            rm /usr/lib/librocksdb* /usr/local/lib/librocksdb*
+
+      # Build, install and cache librocksdb
+      - restore_cache:
+          keys:
+          - rocksdb-v1
+
+      - run:
+          name: Install RocksDB
+          command: |
+            cd /opt/rocksdb && DEBUG_LEVEL=0 make shared_lib install-shared
+            ln -fs /opt/rocksdb/librocksdb.so* /usr/lib/
+
+      - save_cache:
+          paths:
+            - /opt/rocksdb
+          key: rocksdb-v1
+
+      # Download and cache python modules
+      - restore_cache:
+          keys:
+          - pip-v1-{{ checksum "requirements.txt" }}
+
+      - run:
+          name: Install Project Dependencies
+          command: |
+            pip3 install -e .
+
+      - save_cache:
+          paths:
+            - /opt/pypy3-v6.0.0-linux64
+          key: pip-v1-{{ checksum "requirements.txt" }}
+
+      # Run tests!
+      - run:
+          name: Run unittest/py.test Tests
+          command: |
+            pypy3 -m pytest quarkchain
+
+      - run:
+          name: Run EVM Tests
+          command: |
+            git apply fixtures/0001-Necessary-changes-to-let-evm-tests-pass.patch
+            pypy3 quarkchain/evm/tests/test_state.py fixtures/GeneralStateTests/
+
+      - store_artifacts:
+          path: test-reports
+          destination: test-reports
